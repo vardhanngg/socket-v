@@ -31,7 +31,6 @@ function generateCode(): string {
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  // Create session (host)
   socket.on('create-session', () => {
     const code = generateCode();
     socket.join(code);
@@ -41,7 +40,6 @@ io.on('connection', (socket) => {
     console.log(`Session created: ${code} by host ${socket.id}`);
   });
 
-  // Join session
   socket.on('join-session', ({ code }) => {
     if (!sessions[code]) {
       socket.emit('error', { message: 'Invalid session code' });
@@ -55,7 +53,6 @@ io.on('connection', (socket) => {
     console.log(`User ${socket.id} joined session ${code}`);
   });
 
-  // Playback control (host only)
   socket.on('playback-control', (data) => {
     const code = Array.from(socket.rooms).find((r) => sessions[r]);
     if (!code || socket.id !== sessions[code]?.hostId) {
@@ -66,27 +63,23 @@ io.on('connection', (socket) => {
     console.log(`Playback control in ${code}: ${data.action}`);
   });
 
-  // Periodic sync from host
   socket.on('sync-state', (data) => {
     const code = Array.from(socket.rooms).find((r) => sessions[r]);
     if (!code || socket.id !== sessions[code]?.hostId) return;
     io.to(code).emit('sync-state', data);
   });
 
-  // Provide state to new joiner
-  socket.on('provide-state', ({ forUser, state }) => {
-    if (socket.id !== sessions[Array.from(socket.rooms).find((r) => sessions[r])]?.hostId) return;
-    io.to(forUser).emit('sync-state', state);
-  });
-
-  // Chat message
+socket.on('provide-state', ({ forUser, state }) => {
+  const code = Array.from(socket.rooms).find((r) => sessions[r]);
+  if (!code || socket.id !== sessions[code]?.hostId) return;
+  io.to(forUser).emit('sync-state', state);
+});
   socket.on('chat-message', ({ message }) => {
     const code = Array.from(socket.rooms).find((r) => sessions[r]);
     if (!code) return;
     io.to(code).emit('chat-message', { userId: socket.id, message });
   });
 
-  // Disconnect handling
   socket.on('disconnect', () => {
     const code = Array.from(socket.rooms).find((r) => sessions[r]);
     if (code) {
@@ -99,9 +92,21 @@ io.on('connection', (socket) => {
       console.log(`User ${socket.id} left session ${code}`);
     }
   });
+
+  // Handle explicit leave
+  socket.on('leave-session', ({ code }) => {
+    if (code && sessions[code]) {
+      socket.leave(code);
+      io.to(code).emit('user-left', { userId: socket.id });
+      if (socket.id === sessions[code].hostId) {
+        io.to(code).emit('session-ended', { message: 'Host left the session' });
+        delete sessions[code];
+      }
+      console.log(`User ${socket.id} left session ${code}`);
+    }
+  });
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK' });
 });

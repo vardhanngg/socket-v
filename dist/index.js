@@ -1,0 +1,107 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const http_1 = __importDefault(require("http"));
+const socket_io_1 = require("socket.io");
+const dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config();
+const app = (0, express_1.default)();
+const server = http_1.default.createServer(app);
+const io = new socket_io_1.Server(server, {
+    cors: {
+        origin: process.env.CORS_ORIGIN || '*',
+        methods: ['GET', 'POST'],
+    },
+});
+// In-memory storage for sessions (code -> {hostId: socket.id})
+const sessions = {};
+// Generate unique 6-char code
+function generateCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    if (sessions[code])
+        return generateCode();
+    return code;
+}
+io.on('connection', (socket) => {
+    console.log(`User connected: ${socket.id}`);
+    // Create session (host)
+    socket.on('create-session', () => {
+        const code = generateCode();
+        socket.join(code);
+        sessions[code] = { hostId: socket.id };
+        socket.emit('session-created', { code });
+        socket.emit('user-joined', { userId: socket.id, isHost: true });
+        console.log(`Session created: ${code} by host ${socket.id}`);
+    });
+    // Join session
+    socket.on('join-session', ({ code }) => {
+        if (!sessions[code]) {
+            socket.emit('error', { message: 'Invalid session code' });
+            return;
+        }
+        socket.join(code);
+        const isHost = socket.id === sessions[code].hostId;
+        io.to(code).emit('user-joined', { userId: socket.id, isHost });
+        socket.emit('session-joined', { code, isHost });
+        socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
+        console.log(`User ${socket.id} joined session ${code}`);
+    });
+    // Playback control (host only)
+    socket.on('playback-control', (data) => {
+        const code = Array.from(socket.rooms).find((r) => sessions[r]);
+        if (!code || socket.id !== sessions[code]?.hostId) {
+            socket.emit('error', { message: 'Only host can control playback' });
+            return;
+        }
+        io.to(code).emit('playback-control', data);
+        console.log(`Playback control in ${code}: ${data.action}`);
+    });
+    // Periodic sync from host
+    socket.on('sync-state', (data) => {
+        const code = Array.from(socket.rooms).find((r) => sessions[r]);
+        if (!code || socket.id !== sessions[code]?.hostId)
+            return;
+        io.to(code).emit('sync-state', data);
+    });
+    // Provide state to new joiner
+    socket.on('provide-state', ({ forUser, state }) => {
+        if (socket.id !== sessions[Array.from(socket.rooms).find((r) => sessions[r])]?.hostId)
+            return;
+        io.to(forUser).emit('sync-state', state);
+    });
+    // Chat message
+    socket.on('chat-message', ({ message }) => {
+        const code = Array.from(socket.rooms).find((r) => sessions[r]);
+        if (!code)
+            return;
+        io.to(code).emit('chat-message', { userId: socket.id, message });
+    });
+    // Disconnect handling
+    socket.on('disconnect', () => {
+        const code = Array.from(socket.rooms).find((r) => sessions[r]);
+        if (code) {
+            io.to(code).emit('user-left', { userId: socket.id });
+            if (socket.id === sessions[code]?.hostId) {
+                io.to(code).emit('session-ended', { message: 'Host left the session' });
+                delete sessions[code];
+                console.log(`Session ${code} ended (host left)`);
+            }
+            console.log(`User ${socket.id} left session ${code}`);
+        }
+    });
+});
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'OK' });
+});
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+    console.log(`Listen Together server running on port ${PORT}`);
+});
