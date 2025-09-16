@@ -7,9 +7,28 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+
+// Parse CORS_ORIGIN safely
+let corsOrigins: string | string[] = '*'; // Default to wildcard for safety
+if (process.env.CORS_ORIGIN) {
+  try {
+    corsOrigins = process.env.CORS_ORIGIN.split(',')
+      .map(origin => origin.trim())
+      .filter(origin => origin && /^https?:\/\/[\w\-.:]+$/.test(origin)); // Validate URLs
+    console.log('Parsed CORS origins:', corsOrigins);
+    if (corsOrigins.length === 0) {
+      console.warn('No valid CORS origins found, falling back to *');
+      corsOrigins = '*';
+    }
+  } catch (err: any) { // Explicitly type err as 'any' or 'Error'
+    console.error('Error parsing CORS_ORIGIN:', err instanceof Error ? err.message : String(err));
+    corsOrigins = '*';
+  }
+}
+
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: corsOrigins,
     methods: ['GET', 'POST'],
   },
 });
@@ -29,7 +48,8 @@ function generateCode(): string {
 }
 
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+  console.log(`User connected: ${socket.id}, transport: ${socket.conn.transport.name}`);
+  socket.conn.on('upgrade', () => console.log(`Upgraded to WebSocket: ${socket.id}`));
 
   socket.on('create-session', () => {
     const code = generateCode();
@@ -41,7 +61,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join-session', ({ code }) => {
-    if (!sessions[code]) {
+    if (!code || !sessions[code]) {
       socket.emit('error', { message: 'Invalid session code' });
       return;
     }
@@ -54,8 +74,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('playback-control', (data) => {
-    const code = Array.from(socket.rooms).find((r) => sessions[r]);
-    if (!code || socket.id !== sessions[code]?.hostId) {
+    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
+    if (!code || socket.id !== sessions[code].hostId) {
       socket.emit('error', { message: 'Only host can control playback' });
       return;
     }
@@ -64,43 +84,43 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sync-state', (data) => {
-    const code = Array.from(socket.rooms).find((r) => sessions[r]);
-    if (!code || socket.id !== sessions[code]?.hostId) return;
+    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
+    if (!code || socket.id !== sessions[code].hostId) return;
     io.to(code).emit('sync-state', data);
   });
 
-socket.on('provide-state', ({ forUser, state }) => {
-  const code = Array.from(socket.rooms).find((r) => sessions[r]);
-  if (!code || socket.id !== sessions[code]?.hostId) return;
-  io.to(forUser).emit('sync-state', state);
-});
+  socket.on('provide-state', ({ forUser, state }) => {
+    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
+    if (!code || socket.id !== sessions[code].hostId) return;
+    io.to(forUser).emit('sync-state', state);
+  });
+
   socket.on('chat-message', ({ message }) => {
-    const code = Array.from(socket.rooms).find((r) => sessions[r]);
+    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
     if (!code) return;
     io.to(code).emit('chat-message', { userId: socket.id, message });
   });
 
-  socket.on('disconnect', () => {
-    const code = Array.from(socket.rooms).find((r) => sessions[r]);
-    if (code) {
-      io.to(code).emit('user-left', { userId: socket.id });
-      if (socket.id === sessions[code]?.hostId) {
-        io.to(code).emit('session-ended', { message: 'Host left the session' });
-        delete sessions[code];
-        console.log(`Session ${code} ended (host left)`);
-      }
-      console.log(`User ${socket.id} left session ${code}`);
+  socket.on('leave-session', ({ code }) => {
+    if (!code || !sessions[code]) return;
+    socket.leave(code);
+    io.to(code).emit('user-left', { userId: socket.id });
+    if (socket.id === sessions[code].hostId) {
+      io.to(code).emit('session-ended', { message: 'Host left the session' });
+      delete sessions[code];
+      console.log(`Session ${code} ended (host left)`);
     }
+    console.log(`User ${socket.id} left session ${code}`);
   });
 
-  // Handle explicit leave
-  socket.on('leave-session', ({ code }) => {
-    if (code && sessions[code]) {
-      socket.leave(code);
+  socket.on('disconnect', () => {
+    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
+    if (code) {
       io.to(code).emit('user-left', { userId: socket.id });
       if (socket.id === sessions[code].hostId) {
         io.to(code).emit('session-ended', { message: 'Host left the session' });
         delete sessions[code];
+        console.log(`Session ${code} ended (host left)`);
       }
       console.log(`User ${socket.id} left session ${code}`);
     }
