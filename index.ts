@@ -60,6 +60,29 @@ io.on('connection', (socket) => {
     console.log(`Session created: ${code} by host ${socket.id}`);
   });
 
+  socket.on('transfer-host', ({ code, newHostId }) => {
+  // check session exists
+  if (!code || !sessions[code]) {
+    socket.emit('error', { message: 'Invalid session for host transfer' });
+    return;
+  }
+
+  // only current host can transfer
+  if (socket.id !== sessions[code].hostId) {
+    socket.emit('error', { message: 'Only the current host can transfer host rights' });
+    return;
+  }
+
+  // update host
+  sessions[code].hostId = newHostId;
+
+  // notify everyone in the session
+  io.to(code).emit('host-transferred', { newHostId });
+
+  console.log(`Host rights for session ${code} transferred to ${newHostId}`);
+});
+  
+
   socket.on('join-session', ({ code }) => {
     if (!code || !sessions[code]) {
       socket.emit('error', { message: 'Invalid session code' });
