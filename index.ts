@@ -83,18 +83,33 @@ io.on('connection', (socket) => {
 });
   
 
-  socket.on('join-session', ({ code }) => {
-    if (!code || !sessions[code]) {
-      socket.emit('error', { message: 'Invalid session code' });
-      return;
-    }
-    socket.join(code);
-    const isHost = socket.id === sessions[code].hostId;
-    io.to(code).emit('user-joined', { userId: socket.id, isHost });
-    socket.emit('session-joined', { code, isHost });
-    socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
-    console.log(`User ${socket.id} joined session ${code}`);
-  });
+socket.on('join-session', ({ code, name }, callback) => {
+  if (!code || !sessions[code]) {
+    if (callback) callback(false);
+    socket.emit('error', { message: 'Invalid session code' });
+    return;
+  }
+
+  socket.join(code);
+
+  const isHost = socket.id === sessions[code].hostId;
+  const displayName = name && name.trim() ? name : "Guest";
+
+  // broadcast join with name
+  io.to(code).emit('user-joined', { userId: socket.id, name: displayName, isHost });
+
+  // tell just this client that they joined successfully
+  socket.emit('session-joined', { code, isHost, name: displayName });
+
+  // if frontend expected callback, send success
+  if (callback) callback(true);
+
+  // request state from host
+  socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
+
+  console.log(`User ${socket.id} (${displayName}) joined session ${code}`);
+});
+
 
   socket.on('playback-control', (data) => {
     const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
