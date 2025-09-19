@@ -94,12 +94,24 @@ io.on('connection', (socket) => {
     if (!code || socket.id !== sessions[code].hostId) return;
     io.to(forUser).emit('sync-state', state);
   });
-
+/*
   socket.on('chat-message', ({ message }) => {
     const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
     if (!code) return;
     io.to(code).emit('chat-message', { userId: socket.id, message });
+  });*/
+
+  socket.on('chat-message', ({ user, message, time }) => {
+  const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
+  if (!code) return;
+
+  io.to(code).emit('chat-message', {
+    user: user && user.trim() ? user : 'Guest',
+    message,
+    time
   });
+});
+
 
   socket.on('leave-session', ({ code }) => {
     if (!code || !sessions[code]) return;
