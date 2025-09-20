@@ -93,22 +93,25 @@ socket.on('join-session', ({ code, name }, callback) => {
   socket.join(code);
 
   const isHost = socket.id === sessions[code].hostId;
-  const displayName = name && name.trim() ? name : "Guest";
+  const displayName = name && name.trim() ? name : 'Guest';
 
-  // broadcast join with name
-  io.to(code).emit('user-joined', { userId: socket.id, name: displayName, isHost });
+  // ✅ keep the name so we can use it on disconnect/leave
+  socket.data.displayName = displayName;
 
-  // tell just this client that they joined successfully
+  io.to(code).emit('user-joined', {
+    userId: socket.id,
+    name: displayName,
+    isHost
+  });
+
   socket.emit('session-joined', { code, isHost, name: displayName });
-
-  // if frontend expected callback, send success
   if (callback) callback(true);
 
-  // request state from host
   socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
 
   console.log(`User ${socket.id} (${displayName}) joined session ${code}`);
 });
+
 
 
   socket.on('playback-control', (data) => {
@@ -151,30 +154,45 @@ socket.on('join-session', ({ code, name }, callback) => {
 });
 
 
-  socket.on('leave-session', ({ code }) => {
-    if (!code || !sessions[code]) return;
-    socket.leave(code);
-    io.to(code).emit('user-left', { userId: socket.id });
+ socket.on('leave-session', ({ code }) => {
+  if (!code || !sessions[code]) return;
+
+  socket.leave(code);
+
+  const name = socket.data.displayName || 'Guest';
+  io.to(code).emit('user-left', { userId: socket.id, name });
+
+  if (socket.id === sessions[code].hostId) {
+    io.to(code).emit('session-ended', { message: 'Host left the session' });
+    delete sessions[code];
+    console.log(`Session ${code} ended (host left)`);
+  }
+  console.log(`User ${socket.id} (${name}) left session ${code}`);
+});
+
+
+
+socket.on('disconnect', () => {
+  const code = Array.from(socket.rooms).find(
+    (r) => r !== socket.id && sessions[r]
+  );
+
+  if (code) {
+    const name = socket.data.displayName || 'Guest';
+
+    // ✅ emit both the id and the saved name
+    io.to(code).emit('user-left', { userId: socket.id, name });
+
     if (socket.id === sessions[code].hostId) {
       io.to(code).emit('session-ended', { message: 'Host left the session' });
       delete sessions[code];
       console.log(`Session ${code} ended (host left)`);
     }
-    console.log(`User ${socket.id} left session ${code}`);
-  });
 
-  socket.on('disconnect', () => {
-    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
-    if (code) {
-      io.to(code).emit('user-left', { userId: socket.id });
-      if (socket.id === sessions[code].hostId) {
-        io.to(code).emit('session-ended', { message: 'Host left the session' });
-        delete sessions[code];
-        console.log(`Session ${code} ended (host left)`);
-      }
-      console.log(`User ${socket.id} left session ${code}`);
-    }
-  });
+    console.log(`User ${socket.id} (${name}) left session ${code}`);
+  }
+});
+
 });
 
 app.get('/health', (req, res) => {
