@@ -20,7 +20,7 @@ if (process.env.CORS_ORIGIN) {
       console.warn('No valid CORS origins found, falling back to *');
       corsOrigins = '*';
     }
-  } catch (err: any) { // Explicitly type err as 'any' or 'Error'
+  } catch (err: any) {
     console.error('Error parsing CORS_ORIGIN:', err instanceof Error ? err.message : String(err));
     corsOrigins = '*';
   }
@@ -48,7 +48,7 @@ function generateCode(): string {
 }
 
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}, transport: ${socket.conn.transport.name}`);
+  console.log(`🔌 New connection: ${socket.id} (name not set yet), transport: ${socket.conn.transport.name}`);
   socket.conn.on('upgrade', () => console.log(`Upgraded to WebSocket: ${socket.id}`));
 
   socket.on('create-session', () => {
@@ -57,62 +57,52 @@ io.on('connection', (socket) => {
     sessions[code] = { hostId: socket.id };
     socket.emit('session-created', { code });
     socket.emit('user-joined', { userId: socket.id, isHost: true });
-    console.log(`Session created: ${code} by host ${socket.id}`);
+    console.log(`📀 Session created: ${code} by host ${socket.data.displayName || socket.id}`);
   });
 
   socket.on('transfer-host', ({ code, newHostId }) => {
-  // check session exists
-  if (!code || !sessions[code]) {
-    socket.emit('error', { message: 'Invalid session for host transfer' });
-    return;
-  }
+    if (!code || !sessions[code]) {
+      socket.emit('error', { message: 'Invalid session for host transfer' });
+      return;
+    }
+    if (socket.id !== sessions[code].hostId) {
+      socket.emit('error', { message: 'Only the current host can transfer host rights' });
+      return;
+    }
 
-  // only current host can transfer
-  if (socket.id !== sessions[code].hostId) {
-    socket.emit('error', { message: 'Only the current host can transfer host rights' });
-    return;
-  }
+    sessions[code].hostId = newHostId;
+    io.to(code).emit('host-transferred', { newHostId });
 
-  // update host
-  sessions[code].hostId = newHostId;
-
-  // notify everyone in the session
-  io.to(code).emit('host-transferred', { newHostId });
-
-  console.log(`Host rights for session ${code} transferred to ${newHostId}`);
-});
-  
-
-socket.on('join-session', ({ code, name }, callback) => {
-  if (!code || !sessions[code]) {
-    if (callback) callback(false);
-    socket.emit('error', { message: 'Invalid session code' });
-    return;
-  }
-
-  socket.join(code);
-
-  const isHost = socket.id === sessions[code].hostId;
-  const displayName = name && name.trim() ? name : 'Guest';
-
-  // ✅ keep the name so we can use it on disconnect/leave
-  socket.data.displayName = displayName;
-
-  io.to(code).emit('user-joined', {
-    userId: socket.id,
-    name: displayName,
-    isHost
+    console.log(`👑 Host rights in ${code} transferred from ${socket.data.displayName || socket.id} to ${newHostId}`);
   });
 
-  socket.emit('session-joined', { code, isHost, name: displayName });
-  if (callback) callback(true);
+  socket.on('join-session', ({ code, name }, callback) => {
+    if (!code || !sessions[code]) {
+      if (callback) callback(false);
+      socket.emit('error', { message: 'Invalid session code' });
+      return;
+    }
 
-  socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
+    socket.join(code);
 
-  console.log(`User ${socket.id} (${displayName}) joined session ${code}`);
-});
+    const isHost = socket.id === sessions[code].hostId;
+    const displayName = name && name.trim() ? name : 'Guest';
 
+    socket.data.displayName = displayName;
 
+    io.to(code).emit('user-joined', {
+      userId: socket.id,
+      name: displayName,
+      isHost
+    });
+
+    socket.emit('session-joined', { code, isHost, name: displayName });
+    if (callback) callback(true);
+
+    socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
+
+    console.log(`✅ User ${socket.id} (${displayName}) joined session ${code}`);
+  });
 
   socket.on('playback-control', (data) => {
     const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
@@ -121,7 +111,7 @@ socket.on('join-session', ({ code, name }, callback) => {
       return;
     }
     io.to(code).emit('playback-control', data);
-    console.log(`Playback control in ${code}: ${data.action}`);
+    console.log(`🎵 Playback control in ${code} by ${socket.data.displayName || socket.id}: ${data.action}`);
   });
 
   socket.on('sync-state', (data) => {
@@ -135,64 +125,57 @@ socket.on('join-session', ({ code, name }, callback) => {
     if (!code || socket.id !== sessions[code].hostId) return;
     io.to(forUser).emit('sync-state', state);
   });
-/*
-  socket.on('chat-message', ({ message }) => {
-    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
-    if (!code) return;
-    io.to(code).emit('chat-message', { userId: socket.id, message });
-  });*/
 
   socket.on('chat-message', ({ user, message, time }) => {
-  const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
-  if (!code) return;
+    const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
+    if (!code) return;
 
-  io.to(code).emit('chat-message', {
-    user: user && user.trim() ? user : 'Guest',
-    message,
-    time
+    const displayName = socket.data.displayName || (user && user.trim()) || 'Guest';
+
+    console.log(`💬 Chat in ${code} from ${displayName}: ${message}`);
+
+    io.to(code).emit('chat-message', {
+      user: displayName,
+      message,
+      time
+    });
   });
-});
 
+  socket.on('leave-session', ({ code }) => {
+    if (!code || !sessions[code]) return;
 
- socket.on('leave-session', ({ code }) => {
-  if (!code || !sessions[code]) return;
+    socket.leave(code);
 
-  socket.leave(code);
-
-  const name = socket.data.displayName || 'Guest';
-  io.to(code).emit('user-left', { userId: socket.id, name });
-
-  if (socket.id === sessions[code].hostId) {
-    io.to(code).emit('session-ended', { message: 'Host left the session' });
-    delete sessions[code];
-    console.log(`Session ${code} ended (host left)`);
-  }
-  console.log(`User ${socket.id} (${name}) left session ${code}`);
-});
-
-
-
-socket.on('disconnect', () => {
-  const code = Array.from(socket.rooms).find(
-    (r) => r !== socket.id && sessions[r]
-  );
-
-  if (code) {
     const name = socket.data.displayName || 'Guest';
-
-    // ✅ emit both the id and the saved name
     io.to(code).emit('user-left', { userId: socket.id, name });
 
     if (socket.id === sessions[code].hostId) {
       io.to(code).emit('session-ended', { message: 'Host left the session' });
       delete sessions[code];
-      console.log(`Session ${code} ended (host left)`);
+      console.log(`❌ Session ${code} ended (host ${name} left)`);
     }
+    console.log(`👋 User ${socket.id} (${name}) left session ${code}`);
+  });
 
-    console.log(`User ${socket.id} (${name}) left session ${code}`);
-  }
-});
+  socket.on('disconnect', () => {
+    const code = Array.from(socket.rooms).find(
+      (r) => r !== socket.id && sessions[r]
+    );
 
+    if (code) {
+      const name = socket.data.displayName || 'Guest';
+
+      io.to(code).emit('user-left', { userId: socket.id, name });
+
+      if (socket.id === sessions[code].hostId) {
+        io.to(code).emit('session-ended', { message: 'Host left the session' });
+        delete sessions[code];
+        console.log(`❌ Session ${code} ended (host ${name} disconnected)`);
+      }
+
+      console.log(`👋 User ${socket.id} (${name}) disconnected from session ${code}`);
+    }
+  });
 });
 
 app.get('/health', (req, res) => {
@@ -201,5 +184,5 @@ app.get('/health', (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`Listen Together server running on port ${PORT}`);
-});   
+  console.log(`🚀 Listen Together server running on port ${PORT}`);
+});
