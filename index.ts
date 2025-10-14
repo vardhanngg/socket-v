@@ -2,6 +2,9 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -9,7 +12,7 @@ const app = express();
 const server = http.createServer(app);
 
 // Parse CORS_ORIGIN safely
-let corsOrigins: string | string[] = '*'; // Default to wildcard for safety
+let corsOrigins = '*'; // Default to wildcard for safety
 if (process.env.CORS_ORIGIN) {
   try {
     corsOrigins = process.env.CORS_ORIGIN.split(',')
@@ -20,7 +23,7 @@ if (process.env.CORS_ORIGIN) {
       console.warn('No valid CORS origins found, falling back to *');
       corsOrigins = '*';
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error parsing CORS_ORIGIN:', err instanceof Error ? err.message : String(err));
     corsOrigins = '*';
   }
@@ -33,11 +36,32 @@ const io = new Server(server, {
   },
 });
 
+/* ------------------ MEDIA UPLOAD SETUP ------------------ */
+
+// Create /uploads folder if missing
+const uploadDir = path.resolve('./uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+// Configure Multer for local file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, unique + path.extname(file.originalname));
+  },
+});
+const upload = multer({ storage });
+
+// Serve uploaded files as static content
+app.use('/uploads', express.static(uploadDir));
+
+/* ------------------ EXISTING SESSION SYSTEM ------------------ */
+
 // In-memory storage for sessions (code -> {hostId: socket.id})
-const sessions: { [code: string]: { hostId: string } } = {};
+const sessions = {};
 
 // Generate unique 6-char code
-function generateCode(): string {
+function generateCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
@@ -141,6 +165,13 @@ io.on('connection', (socket) => {
     });
   });
 
+  /* ------------------ 🖼️ MEDIA SHARE EVENT ------------------ */
+  socket.on('media-share', ({ code, fileUrl, fileType, user }) => {
+    if (!sessions[code]) return;
+    io.to(code).emit('media-share', { user, fileUrl, fileType });
+    console.log(`📤 Media shared in ${code} by ${user}: ${fileUrl}`);
+  });
+
   socket.on('leave-session', ({ code }) => {
     if (!code || !sessions[code]) return;
 
@@ -178,10 +209,20 @@ io.on('connection', (socket) => {
   });
 });
 
+/* ------------------ EXPRESS ROUTES ------------------ */
+
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK' });
 });
 
+// Media upload route
+app.post('/upload', upload.single('media'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const fileUrl = `${process.env.BASE_URL || 'http://localhost:3001'}/uploads/${req.file.filename}`;
+  res.json({ fileUrl, fileType: req.file.mimetype });
+});
+
+/* ------------------ START SERVER ------------------ */
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`🚀 Listen Together server running on port ${PORT}`);
