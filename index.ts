@@ -70,11 +70,17 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 // Configure Multer for local file uploads
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
+  filename: (req, file, cb) => {
+    const userName = req.body.name || "anonymous"; // Get name from request or default to "anonymous"
+    const sanitizedUserName = userName.replace(/\s+/g, "_"); // Replace spaces with underscores
+    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9); // Generate unique suffix
+    const fileExtension = path.extname(file.originalname); // Extract file extension
+    
+    // Create filename: "username-uniqueNumber.extension"
+    cb(null, sanitizedUserName + "-" + unique + fileExtension);
   },
 });
+
 const upload = multer({ storage });
 
 // Serve uploaded files as static content
@@ -272,7 +278,11 @@ app.get("/health", (req, res) => {
 // ✅ Typed file upload route
 app.post("/upload", upload.single("media"), async (req, res) => {
   const file = req.file as Express.Multer.File | undefined;
-  if (!file) return res.status(400).json({ error: "No file uploaded" });
+  const userName = req.body.name; // Ensure that the user's name is passed in the request
+
+  if (!file || !userName) {
+    return res.status(400).json({ error: "No file uploaded or name missing" });
+  }
 
   try {
     const result = await cloudinary.uploader.upload(file.path, {
@@ -288,6 +298,7 @@ app.post("/upload", upload.single("media"), async (req, res) => {
     res.status(500).json({ error: "Cloudinary upload failed" });
   }
 });
+
 
 
 /* ------------------ START SERVER ------------------ */
