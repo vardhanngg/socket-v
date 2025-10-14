@@ -1,3 +1,8 @@
+
+import dotenv from "dotenv";
+
+dotenv.config();
+
 import { v2 as cloudinary } from "cloudinary";
 
 cloudinary.config({
@@ -9,31 +14,22 @@ cloudinary.config({
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import dotenv from "dotenv";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-
-dotenv.config();
-
-const app = express();
-const server = http.createServer(app);
-
-// Parse CORS_ORIGIN safely
+import cors from "cors";
 let corsOrigins: string | string[] = "*"; // ✅ fixed type
 if (process.env.CORS_ORIGIN) {
   try {
     corsOrigins = process.env.CORS_ORIGIN.split(",")
       .map((origin) => origin.trim())
-      .filter(
-        (origin) => origin && /^https?:\/\/[\w\-.:]+$/.test(origin)
-      ); // Validate URLs
+      .filter((origin) => origin && /^https?:\/\/[\w\-.:]+$/.test(origin));
     console.log("Parsed CORS origins:", corsOrigins);
     if (corsOrigins.length === 0) {
       console.warn("No valid CORS origins found, falling back to *");
       corsOrigins = "*";
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error(
       "Error parsing CORS_ORIGIN:",
       err instanceof Error ? err.message : String(err)
@@ -41,6 +37,17 @@ if (process.env.CORS_ORIGIN) {
     corsOrigins = "*";
   }
 }
+
+const app = express();
+const server = http.createServer(app);
+
+// Parse CORS_ORIGIN safely
+app.use(cors({
+  origin: corsOrigins,
+  methods: ['GET', 'POST', 'OPTIONS'],
+}));
+
+
 
 const io = new Server(server, {
   cors: {
