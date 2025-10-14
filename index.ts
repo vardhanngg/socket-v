@@ -1,3 +1,11 @@
+import { v2 as cloudinary } from "cloudinary";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUD_NAME,
+  api_key: process.env.CLOUD_KEY,
+  api_secret: process.env.CLOUD_SECRET,
+});
+
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
@@ -58,7 +66,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Serve uploaded files as static content
-app.use("/uploads", express.static(uploadDir));
+//app.use("/uploads", express.static(uploadDir));
 
 /* ------------------ EXISTING SESSION SYSTEM ------------------ */
 
@@ -250,15 +258,25 @@ app.get("/health", (req, res) => {
 });
 
 // ✅ Typed file upload route
-app.post("/upload", upload.single("media"), (req, res) => {
+app.post("/upload", upload.single("media"), async (req, res) => {
   const file = req.file as Express.Multer.File | undefined;
   if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-  const fileUrl = `${
-    process.env.BASE_URL || "http://localhost:3001"
-  }/uploads/${file.filename}`;
-  res.json({ fileUrl, fileType: file.mimetype });
+  try {
+    const result = await cloudinary.uploader.upload(file.path, {
+      folder: "vibron_uploads", // optional: name of folder in Cloudinary
+    });
+
+    // Delete temp file after upload
+    fs.unlinkSync(file.path);
+
+    res.json({ fileUrl: result.secure_url, fileType: file.mimetype });
+  } catch (err) {
+    console.error("Upload to Cloudinary failed:", err);
+    res.status(500).json({ error: "Cloudinary upload failed" });
+  }
 });
+
 
 /* ------------------ START SERVER ------------------ */
 const PORT = process.env.PORT || 3001;
