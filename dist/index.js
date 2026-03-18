@@ -54,7 +54,6 @@ const upload = (0, multer_1.default)({ storage });
 // Serve uploaded files as static content
 app.use('/uploads', express_1.default.static(uploadDir));
 /* ------------------ EXISTING SESSION SYSTEM ------------------ */
-// In-memory storage for sessions (code -> {hostId: socket.id})
 const sessions = {};
 // Generate unique 6-char code
 function generateCode() {
@@ -73,9 +72,11 @@ io.on('connection', (socket) => {
     socket.on('create-session', () => {
         const code = generateCode();
         socket.join(code);
-        sessions[code] = { hostId: socket.id };
+        sessions[code] = { hostId: socket.id, participants: {} };
+        sessions[code].participants[socket.id] = { name: socket.data.displayName || 'Host', isHost: true };
         socket.emit('session-created', { code });
         socket.emit('user-joined', { userId: socket.id, isHost: true });
+        io.to(code).emit('participantsUpdate', sessions[code].participants);
         console.log(`📀 Session created: ${code} by host ${socket.data.displayName || socket.id}`);
     });
     socket.on('transfer-host', ({ code, newHostId }) => {
@@ -102,14 +103,11 @@ io.on('connection', (socket) => {
         const isHost = socket.id === sessions[code].hostId;
         const displayName = name && name.trim() ? name : 'Guest';
         socket.data.displayName = displayName;
-        io.to(code).emit('user-joined', {
-            userId: socket.id,
-            name: displayName,
-            isHost
-        });
+        sessions[code].participants[socket.id] = { name: displayName, isHost };
+        io.to(code).emit('user-joined', { userId: socket.id, name: displayName, isHost });
+        io.to(code).emit('participantsUpdate', sessions[code].participants);
         socket.emit('session-joined', { code, isHost, name: displayName });
-        if (callback)
-            callback(true);
+        if (callback) callback(true);
         socket.to(sessions[code].hostId).emit('request-state', { forUser: socket.id });
         console.log(`✅ User ${socket.id} (${displayName}) joined session ${code}`);
     });
@@ -158,7 +156,9 @@ io.on('connection', (socket) => {
             return;
         socket.leave(code);
         const name = socket.data.displayName || 'Guest';
+        delete sessions[code].participants[socket.id];
         io.to(code).emit('user-left', { userId: socket.id, name });
+        io.to(code).emit('participantsUpdate', sessions[code].participants);
         if (socket.id === sessions[code].hostId) {
             io.to(code).emit('session-ended', { message: 'Host left the session' });
             delete sessions[code];
@@ -166,11 +166,18 @@ io.on('connection', (socket) => {
         }
         console.log(`👋 User ${socket.id} (${name}) left session ${code}`);
     });
+    socket.on('suggest-song', ({ code, song, from }) => {
+        if (!code || !sessions[code]) return;
+        io.to(sessions[code].hostId).emit('song-suggested', { song, from });
+        console.log(`✋ Song suggested in ${code} by ${from}: ${song?.title}`);
+    });
     socket.on('disconnect', () => {
         const code = Array.from(socket.rooms).find((r) => r !== socket.id && sessions[r]);
         if (code) {
             const name = socket.data.displayName || 'Guest';
+            delete sessions[code].participants[socket.id];
             io.to(code).emit('user-left', { userId: socket.id, name });
+            io.to(code).emit('participantsUpdate', sessions[code].participants);
             if (socket.id === sessions[code].hostId) {
                 io.to(code).emit('session-ended', { message: 'Host left the session' });
                 delete sessions[code];
