@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -89,7 +88,7 @@ const upload = multer({ storage });
 /* ------------------ EXISTING SESSION SYSTEM ------------------ */
 
 // ✅ add proper typing for sessions
-const sessions: Record<string, { hostId: string }> = {};
+const sessions: Record<string, { hostId: string; participants: Record<string, { name: string; isHost: boolean }> }> = {};
 
 // Generate unique 6-char code
 function generateCode(): string {
@@ -113,9 +112,15 @@ io.on("connection", (socket) => {
   socket.on("create-session", () => {
     const code = generateCode();
     socket.join(code);
-    sessions[code] = { hostId: socket.id };
+    sessions[code] = {
+      hostId: socket.id,
+      participants: {}
+    };
+    // Add host to participants right away (name set later on join-session)
+    sessions[code].participants[socket.id] = { name: socket.data.displayName || 'Host', isHost: true };
     socket.emit("session-created", { code });
     socket.emit("user-joined", { userId: socket.id, isHost: true });
+    io.to(code).emit("participantsUpdate", sessions[code].participants);
     console.log(
       `📀 Session created: ${code} by host ${socket.data.displayName || socket.id}`
     );
@@ -154,14 +159,19 @@ io.on("connection", (socket) => {
 
     const isHost = socket.id === sessions[code].hostId;
     const displayName = name && name.trim() ? name : "Guest";
-
     socket.data.displayName = displayName;
+
+    // Add to participants map
+    sessions[code].participants[socket.id] = { name: displayName, isHost };
 
     io.to(code).emit("user-joined", {
       userId: socket.id,
       name: displayName,
       isHost,
     });
+
+    // Send authoritative participant list to all
+    io.to(code).emit("participantsUpdate", sessions[code].participants);
 
     socket.emit("session-joined", { code, isHost, name: displayName });
     if (callback) callback(true);
@@ -223,6 +233,14 @@ io.on("connection", (socket) => {
     });
   });
 
+  /* ------------------ 🎵 SONG SUGGESTION EVENT ------------------ */
+  socket.on("suggest-song", ({ code, song, from }) => {
+    if (!code || !sessions[code]) return;
+    // Only forward to the host, not the whole room
+    io.to(sessions[code].hostId).emit("song-suggested", { song, from });
+    console.log(`✋ Song suggested in ${code} by ${from}: ${song?.title}`);
+  });
+
   /* ------------------ 🖼️ MEDIA SHARE EVENT ------------------ */
   socket.on("media-share", ({ code, fileUrl, fileType, user }) => {
     if (!sessions[code]) return;
@@ -236,7 +254,13 @@ io.on("connection", (socket) => {
     socket.leave(code);
 
     const name = socket.data.displayName || "Guest";
+
+    // Remove from participants map
+    delete sessions[code].participants[socket.id];
+
     io.to(code).emit("user-left", { userId: socket.id, name });
+    // Send authoritative updated list
+    io.to(code).emit("participantsUpdate", sessions[code].participants);
 
     if (socket.id === sessions[code].hostId) {
       io.to(code).emit("session-ended", { message: "Host left the session" });
@@ -254,7 +278,12 @@ io.on("connection", (socket) => {
     if (code) {
       const name = socket.data.displayName || "Guest";
 
+      // Remove from participants map
+      delete sessions[code].participants[socket.id];
+
       io.to(code).emit("user-left", { userId: socket.id, name });
+      // Send authoritative updated list
+      io.to(code).emit("participantsUpdate", sessions[code].participants);
 
       if (socket.id === sessions[code].hostId) {
         io.to(code).emit("session-ended", {
