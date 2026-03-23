@@ -109,21 +109,20 @@ io.on("connection", (socket) => {
     console.log(`Upgraded to WebSocket: ${socket.id}`)
   );
 
-  socket.on("create-session", ({ name }: { name?: string } = {}) => {
+  socket.on("create-session", () => {
     const code = generateCode();
     socket.join(code);
-    const displayName = (name && name.trim()) ? name : 'Host';
-    socket.data.displayName = displayName;
     sessions[code] = {
       hostId: socket.id,
       participants: {}
     };
-    sessions[code].participants[socket.id] = { name: displayName, isHost: true };
+    // Add host to participants right away (name set later on join-session)
+    sessions[code].participants[socket.id] = { name: socket.data.displayName || 'Host', isHost: true };
     socket.emit("session-created", { code });
-    socket.emit("user-joined", { userId: socket.id, isHost: true, name: displayName });
+    socket.emit("user-joined", { userId: socket.id, isHost: true });
     io.to(code).emit("participantsUpdate", sessions[code].participants);
     console.log(
-      `📀 Session created: ${code} by host ${displayName}`
+      `📀 Session created: ${code} by host ${socket.data.displayName || socket.id}`
     );
   });
 
@@ -237,9 +236,27 @@ io.on("connection", (socket) => {
   /* ------------------ 🎵 SONG SUGGESTION EVENT ------------------ */
   socket.on("suggest-song", ({ code, song, from }) => {
     if (!code || !sessions[code]) return;
-    // Only forward to the host, not the whole room
     io.to(sessions[code].hostId).emit("song-suggested", { song, from });
     console.log(`✋ Song suggested in ${code} by ${from}: ${song?.title}`);
+  });
+
+  socket.on("kick-participant", ({ code, userId }) => {
+    if (!code || !sessions[code]) return;
+    if (socket.id !== sessions[code].hostId) {
+      socket.emit("error", { message: "Only host can remove participants" });
+      return;
+    }
+    const name = sessions[code].participants[userId]?.name || "Guest";
+    // Tell the kicked user
+    io.to(userId).emit("kicked");
+    // Tell the room
+    delete sessions[code].participants[userId];
+    io.to(code).emit("user-left", { userId, name });
+    io.to(code).emit("participantsUpdate", sessions[code].participants);
+    // Force disconnect from room
+    const kickedSocket = io.sockets.sockets.get(userId);
+    if (kickedSocket) kickedSocket.leave(code);
+    console.log(`👟 User ${userId} (${name}) kicked from session ${code}`);
   });
 
   /* ------------------ 🖼️ MEDIA SHARE EVENT ------------------ */
