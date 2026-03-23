@@ -169,6 +169,21 @@ io.on('connection', (socket) => {
         io.to(sessions[code].hostId).emit('song-suggested', { song, from });
         console.log(`✋ Song suggested in ${code} by ${from}: ${song?.title}`);
     });
+    socket.on('kick-participant', ({ code, userId }) => {
+        if (!code || !sessions[code]) return;
+        if (socket.id !== sessions[code].hostId) {
+            socket.emit('error', { message: 'Only host can remove participants' });
+            return;
+        }
+        const name = sessions[code].participants[userId]?.name || 'Guest';
+        io.to(userId).emit('kicked');
+        delete sessions[code].participants[userId];
+        io.to(code).emit('user-left', { userId, name });
+        io.to(code).emit('participantsUpdate', sessions[code].participants);
+        const kickedSocket = io.sockets.sockets.get(userId);
+        if (kickedSocket) kickedSocket.leave(code);
+        console.log(`👟 User ${userId} (${name}) kicked from session ${code}`);
+    });
 
     socket.on('media-share', ({ code, fileUrl, fileType, user }) => {
         if (!sessions[code]) return;
