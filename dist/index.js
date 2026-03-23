@@ -197,11 +197,22 @@ io.on('connection', (socket) => {
         const name = socket.data.displayName || 'Guest';
         delete sessions[code].participants[socket.id];
         io.to(code).emit('user-left', { userId: socket.id, name });
-        io.to(code).emit('participantsUpdate', sessions[code].participants);
         if (socket.id === sessions[code].hostId) {
-            io.to(code).emit('session-ended', { message: 'Host left the session' });
-            delete sessions[code];
-            console.log(`❌ Session ${code} ended (host ${name} left)`);
+            const remaining = Object.entries(sessions[code].participants);
+            if (remaining.length > 0) {
+                const [newHostId, newHostData] = remaining[0];
+                sessions[code].hostId = newHostId;
+                sessions[code].participants[newHostId].isHost = true;
+                io.to(code).emit('host-transferred', { newHostId });
+                io.to(code).emit('participantsUpdate', sessions[code].participants);
+                console.log(`👑 Host auto-transferred to ${newHostData.name} in session ${code}`);
+            } else {
+                io.to(code).emit('session-ended', { message: 'Host left the session' });
+                delete sessions[code];
+                console.log(`❌ Session ${code} ended (host ${name} left, no participants)`);
+            }
+        } else {
+            io.to(code).emit('participantsUpdate', sessions[code].participants);
         }
         console.log(`👋 User ${socket.id} (${name}) left session ${code}`);
     });
@@ -212,11 +223,22 @@ io.on('connection', (socket) => {
             const name = socket.data.displayName || 'Guest';
             delete sessions[code].participants[socket.id];
             io.to(code).emit('user-left', { userId: socket.id, name });
-            io.to(code).emit('participantsUpdate', sessions[code].participants);
             if (socket.id === sessions[code].hostId) {
-                io.to(code).emit('session-ended', { message: 'Host left the session' });
-                delete sessions[code];
-                console.log(`❌ Session ${code} ended (host ${name} disconnected)`);
+                const remaining = Object.entries(sessions[code].participants);
+                if (remaining.length > 0) {
+                    const [newHostId, newHostData] = remaining[0];
+                    sessions[code].hostId = newHostId;
+                    sessions[code].participants[newHostId].isHost = true;
+                    io.to(code).emit('host-transferred', { newHostId });
+                    io.to(code).emit('participantsUpdate', sessions[code].participants);
+                    console.log(`👑 Host auto-transferred to ${newHostData.name} in session ${code}`);
+                } else {
+                    io.to(code).emit('session-ended', { message: 'Host left the session' });
+                    delete sessions[code];
+                    console.log(`❌ Session ${code} ended (host ${name} disconnected, no participants)`);
+                }
+            } else {
+                io.to(code).emit('participantsUpdate', sessions[code].participants);
             }
             console.log(`👋 User ${socket.id} (${name}) disconnected from ${code}`);
         }
