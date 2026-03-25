@@ -109,21 +109,17 @@ io.on("connection", (socket) => {
     console.log(`Upgraded to WebSocket: ${socket.id}`)
   );
 
-  socket.on("create-session", () => {
+  socket.on("create-session", ({ name }: { name?: string } = {}) => {
     const code = generateCode();
     socket.join(code);
-    sessions[code] = {
-      hostId: socket.id,
-      participants: {}
-    };
-    // Add host to participants right away (name set later on join-session)
-    sessions[code].participants[socket.id] = { name: socket.data.displayName || 'Host', isHost: true };
+    const displayName = (name && name.trim()) ? name.trim() : 'Host';
+    socket.data.displayName = displayName;
+    sessions[code] = { hostId: socket.id, participants: {} };
+    sessions[code].participants[socket.id] = { name: displayName, isHost: true };
     socket.emit("session-created", { code });
-    socket.emit("user-joined", { userId: socket.id, isHost: true });
+    socket.emit("user-joined", { userId: socket.id, isHost: true, name: displayName });
     io.to(code).emit("participantsUpdate", sessions[code].participants);
-    console.log(
-      `📀 Session created: ${code} by host ${socket.data.displayName || socket.id}`
-    );
+    console.log(`📀 Session created: ${code} by host ${displayName}`);
   });
 
   socket.on("transfer-host", ({ code, newHostId }) => {
