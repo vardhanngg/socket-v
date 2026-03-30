@@ -134,8 +134,24 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // Validate new host is actually in the session
+    if (!sessions[code].participants[newHostId]) {
+      socket.emit("error", { message: "Target user is not in this session" });
+      return;
+    }
+
+    // Update isHost flags in participants map
+    if (sessions[code].participants[socket.id]) {
+      sessions[code].participants[socket.id].isHost = false;
+    }
+    if (sessions[code].participants[newHostId]) {
+      sessions[code].participants[newHostId].isHost = true;
+    }
     sessions[code].hostId = newHostId;
+
     io.to(code).emit("host-transferred", { newHostId });
+    // Send updated participant list so all clients reflect the new host crown
+    io.to(code).emit("participantsUpdate", sessions[code].participants);
 
     console.log(
       `👑 Host rights in ${code} transferred from ${
@@ -235,6 +251,23 @@ io.on("connection", (socket) => {
     // Only forward to the host, not the whole room
     io.to(sessions[code].hostId).emit("song-suggested", { song, from });
     console.log(`✋ Song suggested in ${code} by ${from}: ${song?.title}`);
+  });
+
+  /* ------------------ 👟 KICK PARTICIPANT ------------------ */
+  socket.on("kick-participant", ({ code, userId }: { code: string; userId: string }) => {
+    if (!code || !sessions[code]) return;
+    if (socket.id !== sessions[code].hostId) {
+      socket.emit("error", { message: "Only host can remove participants" });
+      return;
+    }
+    const name = sessions[code].participants[userId]?.name || "Guest";
+    io.to(userId).emit("kicked");
+    delete sessions[code].participants[userId];
+    io.to(code).emit("user-left", { userId, name });
+    io.to(code).emit("participantsUpdate", sessions[code].participants);
+    const kickedSocket = io.sockets.sockets.get(userId);
+    if (kickedSocket) kickedSocket.leave(code);
+    console.log(`👟 User ${userId} (${name}) kicked from session ${code}`);
   });
 
   /* ------------------ 🖼️ MEDIA SHARE EVENT ------------------ */
