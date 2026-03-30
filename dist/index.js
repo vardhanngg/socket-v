@@ -106,7 +106,12 @@ io.on('connection', (socket) => {
             socket.emit('error', { message: 'Only the current host can transfer host rights' });
             return;
         }
-        // Update participants map
+        // Guard: target must be in the session
+        if (!sessions[code].participants[newHostId]) {
+            socket.emit('error', { message: 'Target user is not in this session' });
+            return;
+        }
+        // Update isHost flags in participants map
         if (sessions[code].participants[socket.id]) sessions[code].participants[socket.id].isHost = false;
         if (sessions[code].participants[newHostId]) sessions[code].participants[newHostId].isHost = true;
         sessions[code].hostId = newHostId;
